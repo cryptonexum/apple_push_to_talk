@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Apple Watch 1-to-1 Walkie-Talkie Internet Simulator</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=SF+Pro+Display:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <script src="/socket.io/socket.io.js"></script>
+</head>
+<body>
+  <div class="app-container">
+    <header class="app-header">
+      <div class="logo-group">
+        <div class="watch-icon-badge">⌚</div>
+        <div>
+          <h1>Apple Watch Walkie-Talkie</h1>
+          <p class="subtitle">1-to-1 Real-time Push-to-Talk over Internet</p>
+        </div>
+      </div>
+      <div class="server-status-pill" id="server-status">
+        <span class="status-dot offline"></span> Server Connecting...
+      </div>
+    </header>
+
+    <main class="simulators-wrapper">
+
+      <!-- WATCH 1 CONTAINER -->
+      <section class="watch-card" id="card-watch-1">
+        <div class="watch-header-tag">
+          <span class="user-label">Watch Client A</span>
+          <span class="device-spec">Apple Watch Ultra 2</span>
+        </div>
+
+        <div class="watch-hardware-frame">
+          <div class="watch-crown-btn" id="crown-1" title="Turn Crown / Tap to toggle pairing mode">
+            <div class="crown-ridges"></div>
+          </div>
+          <div class="watch-action-btn" id="action-btn-1" title="Action Button"></div>
+          
+          <div class="watch-screen">
+            <!-- Watch Status Bar -->
+            <div class="watch-top-bar">
+              <span class="time-display" id="time-1">10:09</span>
+              <span class="signal-indicator" id="signal-1">📶 100%</span>
+            </div>
+
+            <!-- Screen View: Setup / Pairing -->
+            <div class="screen-view active" id="setup-view-1">
+              <div class="app-title-sm">WALKIE-TALKIE</div>
+              <div class="channel-box">
+                <label>Channel Code</label>
+                <input type="text" id="code-input-1" maxlength="6" placeholder="123456">
+              </div>
+              <div class="btn-group-row">
+                <button class="wt-btn btn-primary" id="btn-create-1">Create</button>
+                <button class="wt-btn btn-secondary" id="btn-join-1">Join</button>
+              </div>
+              <p class="hint-text">Create a room or enter a 6-digit code to pair with Watch B.</p>
+            </div>
+
+            <!-- Screen View: Live Push-to-Talk -->
+            <div class="screen-view" id="talk-view-1">
+              <div class="peer-status-bar">
+                <span class="peer-indicator" id="peer-ind-1">🔴 Unpaired</span>
+                <span class="room-code-badge" id="badge-code-1">------</span>
+              </div>
+
+              <!-- Big Push To Talk Button -->
+              <div class="ptt-button-outer">
+                <button class="ptt-button" id="ptt-btn-1" disabled>
+                  <div class="mic-icon">🎙️</div>
+                  <span class="ptt-label" id="ptt-label-1">WAITING</span>
+                  <div class="pulse-ring"></div>
+                </button>
+              </div>
+
+              <!-- Audio Waveform Visualizer -->
+              <div class="waveform-container">
+                <canvas id="canvas-1" width="160" height="30"></canvas>
+              </div>
+
+              <div class="watch-bottom-actions">
+                <button class="btn-disconnect" id="btn-disconnect-1">Disconnect</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- SIMULATOR CONTROL BAR -->
+      <div class="sim-connector-info">
+        <div class="connect-line"></div>
+        <div class="internet-cloud">
+          <span>☁️ Internet Relay</span>
+          <small>Low-latency Socket Stream</small>
+        </div>
+        <div class="connect-line"></div>
+      </div>
+
+      <!-- WATCH 2 CONTAINER -->
+      <section class="watch-card" id="card-watch-2">
+        <div class="watch-header-tag">
+          <span class="user-label">Watch Client B</span>
+          <span class="device-spec">Apple Watch Series 9</span>
+        </div>
+
+        <div class="watch-hardware-frame watch-series9">
+          <div class="watch-crown-btn" id="crown-2" title="Turn Crown">
+            <div class="crown-ridges"></div>
+          </div>
+
+          <div class="watch-screen">
+            <!-- Watch Status Bar -->
+            <div class="watch-top-bar">
+              <span class="time-display" id="time-2">10:09</span>
+              <span class="signal-indicator" id="signal-2">📶 100%</span>
+            </div>
+
+            <!-- Screen View: Setup / Pairing -->
+            <div class="screen-view active" id="setup-view-2">
+              <div class="app-title-sm">WALKIE-TALKIE</div>
+              <div class="channel-box">
+                <label>Channel Code</label>
+                <input type="text" id="code-input-2" maxlength="6" placeholder="123456">
+              </div>
+              <div class="btn-group-row">
+                <button class="wt-btn btn-primary" id="btn-create-2">Create</button>
+                <button class="wt-btn btn-secondary" id="btn-join-2">Join</button>
+              </div>
+              <p class="hint-text">Create a room or enter a 6-digit code to pair with Watch A.</p>
+            </div>
+
+            <!-- Screen View: Live Push-to-Talk -->
+            <div class="screen-view" id="talk-view-2">
+              <div class="peer-status-bar">
+                <span class="peer-indicator" id="peer-ind-2">🔴 Unpaired</span>
+                <span class="room-code-badge" id="badge-code-2">------</span>
+              </div>
+
+              <!-- Big Push To Talk Button -->
+              <div class="ptt-button-outer">
+                <button class="ptt-button" id="ptt-btn-2" disabled>
+                  <div class="mic-icon">🎙️</div>
+                  <span class="ptt-label" id="ptt-label-2">WAITING</span>
+                  <div class="pulse-ring"></div>
+                </button>
+              </div>
+
+              <!-- Audio Waveform Visualizer -->
+              <div class="waveform-container">
+                <canvas id="canvas-2" width="160" height="30"></canvas>
+              </div>
+
+              <div class="watch-bottom-actions">
+                <button class="btn-disconnect" id="btn-disconnect-2">Disconnect</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+
+    <footer class="app-instructions">
+      <h3>💡 How to Test 1-to-1 Push-to-Talk:</h3>
+      <ol>
+        <li>Click <strong>Create</strong> on Watch A to generate a 6-digit channel code.</li>
+        <li>Enter that 6-digit code on Watch B and click <strong>Join</strong>.</li>
+        <li>Once paired (Status turns 🟢 Paired), **press and hold** the Push-to-Talk button on Watch A to speak!</li>
+        <li>Watch B will play the incoming voice audio immediately and pulse Cyan!</li>
+      </ol>
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

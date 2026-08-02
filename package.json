@@ -1,0 +1,10 @@
+{
+  "name": "walkietalkie-app",
+  "version": "1.0.0",
+  "description": "Apple Watch Push-to-Talk 1-to-1 Internet Walkie Talkie Project",
+  "scripts": {
+    "postinstall": "cd server && npm install",
+    "start": "cd server && npm start",
+    "dev": "cd server && npm run dev"
+  }
+}
