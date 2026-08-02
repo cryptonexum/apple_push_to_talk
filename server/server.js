@@ -1,11 +1,13 @@
-const express = require('express');
-const http = require('http');
+const express   = require('express');
+const http      = require('http');
 const { Server: SocketIOServer } = require('socket.io');
-const path = require('path');
-const cors = require('cors');
+const webPush   = require('web-push');
+const path      = require('path');
+const cors      = require('cors');
 
 const app = express();
 app.use(cors());
+app.use(express.json());
 
 const webSimulatorPath = path.join(__dirname, '..', 'web-simulator');
 app.use(express.static(webSimulatorPath));
@@ -18,10 +20,21 @@ const io = new SocketIOServer(server, {
   pingTimeout: 5000
 });
 
-const PUBLIC_CHANNEL_CODE = '369000';
+// ── VAPID keys for Web Push ──────────────────────────────────────────────────
+// Replace with your own if you regenerate them
+const VAPID_PUBLIC_KEY  = process.env.VAPID_PUBLIC_KEY  || 'BK1zmq7J9XIC7w0lNTpPsAGEtldNcNcWI4hRfXrrr6e7ft9nHMXwz6r9wFyT_6tpgF-UMH4iReoptUtBAd84B2E';
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || 'tJpX_gTf_nBxtiDP_4t2BUoP2u0n2Ox8LjyfBIZ2cCk';
 
-// rooms: roomCode -> Set of socketIds
-const rooms = new Map();
+webPush.setVapidDetails(
+  'mailto:admin@walkietalkie.app',
+  VAPID_PUBLIC_KEY,
+  VAPID_PRIVATE_KEY
+);
+
+// ── State ────────────────────────────────────────────────────────────────────
+const PUBLIC_CHANNEL_CODE = '369000';
+const rooms = new Map();                      // roomCode -> Set of socketIds
+const pushSubs = new Map();                   // socketId -> pushSubscription
 rooms.set(PUBLIC_CHANNEL_CODE, new Set());
 
 function generateRoomCode() {
@@ -31,17 +44,38 @@ function generateRoomCode() {
   return code;
 }
 
+// ── Send push notification to all room peers of a socket ────────────────────
+async function notifyPeers(roomCode, senderSocketId, payload) {
+  if (!rooms.has(roomCode)) return;
+  rooms.get(roomCode).forEach(async (memberId) => {
+    if (memberId === senderSocketId) return;
+    const sub = pushSubs.get(memberId);
+    if (!sub) return;
+    try {
+      await webPush.sendNotification(sub, JSON.stringify(payload));
+    } catch (e) {
+      console.log(`[Push] Failed to notify ${memberId}:`, e.statusCode || e.message);
+      if (e.statusCode === 410) pushSubs.delete(memberId); // expired subscription
+    }
+  });
+}
+
+// ── Socket.io ────────────────────────────────────────────────────────────────
 io.on('connection', (socket) => {
   console.log(`[+] Connected: ${socket.id}`);
   let currentRoom = null;
 
-  // ---- Room management ----
+  // Store web push subscription for this socket
+  socket.on('push-subscribe', (subscription) => {
+    pushSubs.set(socket.id, subscription);
+    console.log(`[Push] Subscription stored for ${socket.id}`);
+  });
+
   socket.on('create-room', (data, cb) => {
     const code = generateRoomCode();
     rooms.set(code, new Set([socket.id]));
     socket.join(code);
     currentRoom = code;
-    console.log(`[CREATE] Room ${code}`);
     const res = { success: true, roomCode: code, isPaired: false, isPublic: false };
     cb?.(res);
     socket.emit('room-joined', res);
@@ -54,68 +88,48 @@ io.on('connection', (socket) => {
     const isPublic = code === PUBLIC_CHANNEL_CODE;
 
     if (!isPublic && members.size >= 2 && !members.has(socket.id)) {
-      const err = { success: false, message: 'Channel full (1-to-1 max)' };
-      cb?.(err); return;
+      return cb?.({ success: false, message: 'Channel full (1-to-1 max)' });
     }
 
     members.add(socket.id);
     socket.join(code);
     currentRoom = code;
-    console.log(`[JOIN] Room ${code} (${members.size} members)`);
 
     const isPaired = isPublic || members.size >= 2;
     const res = { success: true, roomCode: code, isPaired, isPublic };
     cb?.(res);
     socket.emit('room-joined', res);
-
-    // Tell others someone joined — they will initiate WebRTC offer
     socket.to(code).emit('peer-joined', { peerId: socket.id, isPaired: true, isPublic, shouldOffer: true });
   });
 
-  // ---- WebRTC Signaling Relay ----
-  // Forward offer from caller to the specific peer
-  socket.on('webrtc-offer', ({ targetId, offer }) => {
-    console.log(`[OFFER] ${socket.id} -> ${targetId}`);
-    io.to(targetId).emit('webrtc-offer', { fromId: socket.id, offer });
-  });
+  // ── WebRTC Signaling ────────────────────────────────────────────────────────
+  socket.on('webrtc-offer',  ({ targetId, offer })     => io.to(targetId).emit('webrtc-offer',  { fromId: socket.id, offer }));
+  socket.on('webrtc-answer', ({ targetId, answer })    => io.to(targetId).emit('webrtc-answer', { fromId: socket.id, answer }));
+  socket.on('webrtc-ice',    ({ targetId, candidate }) => io.to(targetId).emit('webrtc-ice',    { fromId: socket.id, candidate }));
 
-  // Forward answer from callee back to caller
-  socket.on('webrtc-answer', ({ targetId, answer }) => {
-    console.log(`[ANSWER] ${socket.id} -> ${targetId}`);
-    io.to(targetId).emit('webrtc-answer', { fromId: socket.id, answer });
-  });
-
-  // Forward ICE candidates between peers
-  socket.on('webrtc-ice', ({ targetId, candidate }) => {
-    io.to(targetId).emit('webrtc-ice', { fromId: socket.id, candidate });
-  });
-
-  // Broadcast offer to whole room (for public multi-user channel)
-  socket.on('webrtc-offer-broadcast', ({ offer }) => {
+  // ── PTT signals + Web Push notification ─────────────────────────────────────
+  socket.on('start-talk', async () => {
     if (!currentRoom) return;
-    socket.to(currentRoom).emit('webrtc-offer', { fromId: socket.id, offer });
-  });
+    socket.to(currentRoom).emit('peer-start-talk', { talkerId: socket.id });
 
-  // ---- PTT signals (still used for UI indicator on peer device) ----
-  socket.on('start-talk', () => {
-    if (currentRoom) socket.to(currentRoom).emit('peer-start-talk', { talkerId: socket.id });
+    // Send push notification to peers who may have closed the app
+    await notifyPeers(currentRoom, socket.id, {
+      title: '🎙️ Incoming Transmission',
+      body:  'Someone is talking in your Walkie-Talkie channel! Tap to listen.',
+      tag:   'walkie-talkie-ptt',
+      room:  currentRoom
+    });
   });
 
   socket.on('stop-talk', () => {
     if (currentRoom) socket.to(currentRoom).emit('peer-stop-talk', { talkerId: socket.id });
   });
 
-  // ---- Leave / Disconnect ----
-  socket.on('leave-room', () => {
-    cleanupSocket();
-  });
+  socket.on('leave-room', () => cleanup());
+  socket.on('disconnect', () => { console.log(`[-] Disconnected: ${socket.id}`); cleanup(); });
 
-  socket.on('disconnect', () => {
-    console.log(`[-] Disconnected: ${socket.id}`);
-    cleanupSocket();
-  });
-
-  function cleanupSocket() {
+  function cleanup() {
+    pushSubs.delete(socket.id);
     if (currentRoom && rooms.has(currentRoom)) {
       rooms.get(currentRoom).delete(socket.id);
       socket.to(currentRoom).emit('peer-left', { peerId: socket.id });
@@ -128,14 +142,17 @@ io.on('connection', (socket) => {
   }
 });
 
+// ── REST API ─────────────────────────────────────────────────────────────────
 app.get('/api/status', (req, res) => {
-  const roomInfo = {};
-  rooms.forEach((m, c) => { roomInfo[c] = m.size; });
-  res.json({ status: 'online', publicChannel: PUBLIC_CHANNEL_CODE, activeRooms: rooms.size, rooms: roomInfo, timestamp: new Date() });
+  res.json({ status: 'online', publicChannel: PUBLIC_CHANNEL_CODE, activeRooms: rooms.size, timestamp: new Date() });
+});
+
+// Expose VAPID public key to clients
+app.get('/api/vapid-public-key', (req, res) => {
+  res.json({ publicKey: VAPID_PUBLIC_KEY });
 });
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`🚀 Walkie-Talkie VoIP server on port ${PORT}`);
-  console.log(`🌐 Public Channel: ${PUBLIC_CHANNEL_CODE}`);
+  console.log(`🚀 Walkie-Talkie VoIP + Push server on port ${PORT}`);
 });
