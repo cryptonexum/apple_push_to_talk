@@ -13,24 +13,50 @@ class NetworkManager: ObservableObject {
     private var webSocketTask: URLSessionWebSocketTask?
     private var serverURL: URL
     private var roomCode: String?
+    private var pingTimer: Timer?
     
     init(serverURLString: String = "wss://applepushtotalk-production.up.railway.app") {
         self.serverURL = URL(string: serverURLString) ?? URL(string: "wss://applepushtotalk-production.up.railway.app")!
     }
     
     func connect() {
-        let session = URLSession(configuration: .default)
+        let configuration = URLSessionConfiguration.default
+        configuration.timeoutIntervalForRequest = 30
+        configuration.timeoutIntervalForResource = 300
+        
+        let session = URLSession(configuration: configuration)
         webSocketTask = session.webSocketTask(with: serverURL)
         webSocketTask?.resume()
+        
         listenForMessages()
+        startPingHeartbeat()
     }
     
     func disconnect() {
+        stopPingHeartbeat()
         webSocketTask?.cancel(with: .normalClosure, reason: nil)
         webSocketTask = nil
         DispatchQueue.main.async {
             self.currentState = .disconnected
         }
+    }
+    
+    private func startPingHeartbeat() {
+        stopPingHeartbeat()
+        DispatchQueue.main.async {
+            self.pingTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
+                self?.webSocketTask?.sendPing { error in
+                    if let error = error {
+                        print("Ping heartbeat error: \(error)")
+                    }
+                }
+            }
+        }
+    }
+    
+    private func stopPingHeartbeat() {
+        pingTimer?.invalidate()
+        pingTimer = nil
     }
     
     func createRoom(code: String) {
@@ -115,6 +141,7 @@ class NetworkManager: ObservableObject {
             switch result {
             case .failure(let error):
                 print("WebSocket receive error: \(error)")
+                self.stopPingHeartbeat()
                 DispatchQueue.main.async {
                     self.currentState = .disconnected
                 }

@@ -20,7 +20,9 @@ const io = new SocketIOServer(server, {
     origin: '*',
     methods: ['GET', 'POST']
   },
-  maxHttpBufferSize: 1e7
+  maxHttpBufferSize: 1e7,
+  pingInterval: 10000,
+  pingTimeout: 5000
 });
 
 // Initialize Native WebSocket Server for Apple Watch URLSessionWebSocketTask
@@ -38,6 +40,19 @@ server.on('upgrade', (request, socket, head) => {
       wss.emit('connection', ws, request);
     });
   }
+});
+
+// Server-side Ping Keepalive to prevent proxy disconnects (Code 1006)
+const pingInterval = setInterval(() => {
+  wss.clients.forEach((ws) => {
+    if (ws.isAlive === false) return ws.terminate();
+    ws.isAlive = false;
+    ws.ping();
+  });
+}, 10000);
+
+wss.on('close', () => {
+  clearInterval(pingInterval);
 });
 
 // Rooms state: code -> { users: Map(id -> clientAdapter) }
@@ -165,6 +180,9 @@ function handleClientMessaging(client) {
 
 // 1. Native WebSocket Connection Handler (Apple Watch)
 wss.on('connection', (ws) => {
+  ws.isAlive = true;
+  ws.on('pong', () => { ws.isAlive = true; });
+
   const id = 'ws_' + Math.random().toString(36).substr(2, 9);
   console.log(`[+] Native WebSocket connected: ${id}`);
 
