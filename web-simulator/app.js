@@ -6,9 +6,10 @@ class PhoneWalkieTalkieApp {
     this.roomCode = null;
     this.isTalking = false;
     this.isReceiving = false;
-    this.mediaRecorder = null;
     this.audioContext = null;
     this.analyser = null;
+    this.scriptProcessor = null;
+    this.micStream = null;
     this.animFrameId = null;
     this.nextPlayTime = 0;
     this.isAudioUnlocked = false;
@@ -85,7 +86,7 @@ class PhoneWalkieTalkieApp {
   async unlockAudioContext() {
     if (!this.audioContext) {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      this.audioContext = new AudioCtx({ latencyHint: 'interactive' });
+      this.audioContext = new AudioCtx({ sampleRate: 22050, latencyHint: 'interactive' });
       this.analyser = this.audioContext.createAnalyser();
       this.analyser.fftSize = 64;
     }
@@ -93,14 +94,13 @@ class PhoneWalkieTalkieApp {
       await this.audioContext.resume();
     }
     if (!this.isAudioUnlocked) {
-      // Play 0.01s silent buffer to warm up iOS Safari speaker output
       const buffer = this.audioContext.createBuffer(1, 1, 22050);
       const source = this.audioContext.createBufferSource();
       source.buffer = buffer;
       source.connect(this.audioContext.destination);
       source.start(0);
       this.isAudioUnlocked = true;
-      console.log('[Audio] Safari AudioContext unlocked successfully');
+      console.log('[Audio Engine] AudioContext ready & unlocked');
     }
   }
 
@@ -132,9 +132,7 @@ class PhoneWalkieTalkieApp {
       gain.connect(this.audioContext.destination);
       osc.start();
       osc.stop(this.audioContext.currentTime + duration);
-    } catch (err) {
-      console.log('Beep audio error:', err);
-    }
+    } catch (err) {}
   }
 
   joinPublicChannel() {
@@ -220,6 +218,7 @@ class PhoneWalkieTalkieApp {
     }
   }
 
+  // Raw PCM Real-Time Audio Capture Engine
   async startTalking() {
     await this.unlockAudioContext();
     this.vibrate([40]);
@@ -233,7 +232,7 @@ class PhoneWalkieTalkieApp {
     this.socket.emit('start-talk');
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
+      this.micStream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
@@ -241,41 +240,28 @@ class PhoneWalkieTalkieApp {
         }
       });
 
-      const source = this.audioContext.createMediaStreamSource(stream);
+      const source = this.audioContext.createMediaStreamSource(this.micStream);
       source.connect(this.analyser);
       this.drawWaveform();
 
-      // Universal audio recording format compatible across iOS Safari & Android & Desktop
-      let mimeType = 'audio/webm;codecs=opus';
-      if (!MediaRecorder.isTypeSupported(mimeType)) {
-        if (MediaRecorder.isTypeSupported('audio/mp4')) {
-          mimeType = 'audio/mp4';
-        } else if (MediaRecorder.isTypeSupported('audio/aac')) {
-          mimeType = 'audio/aac';
-        } else {
-          mimeType = '';
-        }
-      }
+      // Use ScriptProcessor for raw PCM Float32 audio streaming
+      const bufferSize = 2048;
+      this.scriptProcessor = this.audioContext.createScriptProcessor(bufferSize, 1, 1);
 
-      const options = mimeType ? { mimeType } : {};
-      this.mediaRecorder = new MediaRecorder(stream, options);
-      
-      this.mediaRecorder.ondataavailable = (event) => {
-        if (event.data && event.data.size > 0 && this.isTalking) {
-          const reader = new FileReader();
-          reader.onloadend = () => {
-            const base64Data = reader.result;
-            this.socket.emit('audio-chunk', base64Data);
-          };
-          reader.readAsDataURL(event.data);
-        }
+      this.scriptProcessor.onaudioprocess = (e) => {
+        if (!this.isTalking) return;
+        const inputData = e.inputBuffer.getChannelData(0);
+        
+        // Convert Float32 PCM array to Array for socket transmission
+        const pcmArray = Array.from(inputData);
+        this.socket.emit('audio-chunk', { pcm: pcmArray, sampleRate: this.audioContext.sampleRate });
       };
 
-      // Stream audio chunk every 200ms
-      this.mediaRecorder.start(200);
-      this.activeStream = stream;
+      source.connect(this.scriptProcessor);
+      this.scriptProcessor.connect(this.audioContext.destination);
+
     } catch (err) {
-      console.error('Microphone access error:', err);
+      console.error('Microphone capture error:', err);
       this.drawSyntheticWaveform();
     }
   }
@@ -286,12 +272,14 @@ class PhoneWalkieTalkieApp {
     this.vibrate([20]);
     this.playBeep(440, 0.1);
 
-    if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
-      this.mediaRecorder.stop();
+    if (this.scriptProcessor) {
+      this.scriptProcessor.disconnect();
+      this.scriptProcessor = null;
     }
 
-    if (this.activeStream) {
-      this.activeStream.getTracks().forEach(t => t.stop());
+    if (this.micStream) {
+      this.micStream.getTracks().forEach(t => t.stop());
+      this.micStream = null;
     }
 
     if (this.animFrameId) {
@@ -305,13 +293,13 @@ class PhoneWalkieTalkieApp {
 
   onPeerStartTalk() {
     this.isReceiving = true;
-    this.nextPlayTime = 0; // Reset audio queue timing
+    this.nextPlayTime = 0; // Reset queue time for clean low latency
     this.unlockAudioContext();
     this.vibrate([30, 30]);
     this.playBeep(700, 0.08);
     this.pttBtn.className = 'pwa-ptt-button receiving';
     this.pttLabel.textContent = 'LISTENING';
-    this.pttSubtext.textContent = 'Incoming Broadcast...';
+    this.pttSubtext.textContent = 'Incoming Voice...';
     this.drawReceivingWaveform();
   }
 
@@ -326,33 +314,43 @@ class PhoneWalkieTalkieApp {
     this.updatePairState(true);
   }
 
-  async onIncomingAudioChunk(base64Chunk) {
+  // Raw PCM Real-Time Audio Playback Engine
+  async onIncomingAudioChunk(data) {
     try {
       await this.unlockAudioContext();
       
-      // Fetch binary data from base64 data URI
-      const response = await fetch(base64Chunk);
-      const arrayBuffer = await response.arrayBuffer();
+      let pcmSamples = null;
+      let sampleRate = 22050;
 
-      // Decode audio data into AudioBuffer
-      this.audioContext.decodeAudioData(arrayBuffer, (buffer) => {
-        const source = this.audioContext.createBufferSource();
-        source.buffer = buffer;
-        source.connect(this.audioContext.destination);
+      if (data && data.pcm) {
+        pcmSamples = data.pcm;
+        sampleRate = data.sampleRate || 22050;
+      }
 
-        // Schedule smooth gapless playback
-        const currentTime = this.audioContext.currentTime;
-        if (this.nextPlayTime < currentTime) {
-          this.nextPlayTime = currentTime;
-        }
+      if (!pcmSamples || pcmSamples.length === 0) return;
 
-        source.start(this.nextPlayTime);
-        this.nextPlayTime += buffer.duration;
-      }, (decodeErr) => {
-        console.log('Audio chunk decode warning:', decodeErr);
-      });
+      // Create Web Audio PCM buffer directly from float samples
+      const audioBuffer = this.audioContext.createBuffer(1, pcmSamples.length, sampleRate);
+      const channelData = audioBuffer.getChannelData(0);
+      for (let i = 0; i < pcmSamples.length; i++) {
+        channelData[i] = pcmSamples[i];
+      }
+
+      const source = this.audioContext.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(this.audioContext.destination);
+
+      // Gapless audio scheduling
+      const now = this.audioContext.currentTime;
+      if (this.nextPlayTime < now) {
+        this.nextPlayTime = now;
+      }
+
+      source.start(this.nextPlayTime);
+      this.nextPlayTime += audioBuffer.duration;
+
     } catch (e) {
-      console.error('Audio chunk error:', e);
+      console.error('PCM playback error:', e);
     }
   }
 
