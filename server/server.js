@@ -1,6 +1,7 @@
 const express = require('express');
 const http = require('http');
-const { Server } = require('socket.io');
+const { Server: SocketIOServer } = require('socket.io');
+const { WebSocketServer, WebSocket } = require('ws');
 const path = require('path');
 const cors = require('cors');
 
@@ -12,15 +13,34 @@ const webSimulatorPath = path.join(__dirname, '..', 'web-simulator');
 app.use(express.static(webSimulatorPath));
 
 const server = http.createServer(app);
-const io = new Server(server, {
+
+// Initialize Socket.io for web clients
+const io = new SocketIOServer(server, {
   cors: {
     origin: '*',
     methods: ['GET', 'POST']
   },
-  maxHttpBufferSize: 1e7 // 10MB for audio buffer flexibility
+  maxHttpBufferSize: 1e7
 });
 
-// Rooms state: code -> { users: Map(socketId -> { id, deviceType, isTalking }), created: Date }
+// Initialize Native WebSocket Server for Apple Watch URLSessionWebSocketTask
+const wss = new WebSocketServer({ noServer: true });
+
+// Handle HTTP Upgrade requests
+server.on('upgrade', (request, socket, head) => {
+  const pathname = new URL(request.url, `http://${request.headers.host}`).pathname;
+  if (pathname.startsWith('/socket.io/')) {
+    // Handled by Socket.io engine
+    return;
+  } else {
+    // Handled by native WebSocket server
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      wss.emit('connection', ws, request);
+    });
+  }
+});
+
+// Rooms state: code -> { users: Map(id -> clientAdapter) }
 const rooms = new Map();
 
 function generateRoomCode() {
@@ -31,172 +51,177 @@ function generateRoomCode() {
   return code;
 }
 
-io.on('connection', (socket) => {
-  console.log(`[+] Client connected: ${socket.id}`);
-
+// Unified client handler function
+function handleClientMessaging(client) {
   let currentRoom = null;
-  let userMeta = { id: socket.id, deviceType: 'unknown', name: 'User' };
 
-  // Create a new 1-to-1 channel
-  socket.on('create-room', (data, callback) => {
-    const code = generateRoomCode();
-    userMeta.deviceType = data?.deviceType || 'watchOS';
-    userMeta.name = data?.name || `Peer ${socket.id.slice(0, 4)}`;
-
-    const roomData = {
-      code,
-      users: new Map([[socket.id, { ...userMeta, isTalking: false }]]),
-      createdAt: new Date()
-    };
-
-    rooms.set(code, roomData);
-    socket.join(code);
-    currentRoom = code;
-
-    console.log(`[Room Created] Code: ${code} by ${socket.id} (${userMeta.deviceType})`);
-
-    const response = {
-      success: true,
-      roomCode: code,
-      peerCount: 1,
-      isPaired: false
-    };
-
-    if (typeof callback === 'function') callback(response);
-    socket.emit('room-joined', response);
-  });
-
-  // Join an existing channel
-  socket.on('join-room', (data, callback) => {
-    const code = data?.roomCode?.trim();
-    userMeta.deviceType = data?.deviceType || 'watchOS';
-    userMeta.name = data?.name || `Peer ${socket.id.slice(0, 4)}`;
-
-    if (!code || !rooms.has(code)) {
-      const errRes = { success: false, message: 'Invalid or expired Channel Code' };
-      if (typeof callback === 'function') callback(errRes);
-      socket.emit('error-message', errRes);
-      return;
-    }
-
-    const roomData = rooms.get(code);
-
-    if (roomData.users.size >= 2 && !roomData.users.has(socket.id)) {
-      const errRes = { success: false, message: 'Channel is full (1-to-1 max reached)' };
-      if (typeof callback === 'function') callback(errRes);
-      socket.emit('error-message', errRes);
-      return;
-    }
-
-    roomData.users.set(socket.id, { ...userMeta, isTalking: false });
-    socket.join(code);
-    currentRoom = code;
-
-    console.log(`[Room Joined] Code: ${code} by ${socket.id}`);
-
-    const isPaired = roomData.users.size === 2;
-    const response = {
-      success: true,
-      roomCode: code,
-      peerCount: roomData.users.size,
-      isPaired
-    };
-
-    if (typeof callback === 'function') callback(response);
-    socket.emit('room-joined', response);
-
-    // Notify other peer in room
-    socket.to(code).emit('peer-joined', {
-      peerId: socket.id,
-      deviceType: userMeta.deviceType,
-      name: userMeta.name,
-      peerCount: roomData.users.size,
-      isPaired: true
-    });
-  });
-
-  // Start Push-to-Talk
-  socket.on('start-talk', () => {
-    if (!currentRoom || !rooms.has(currentRoom)) return;
-    const room = rooms.get(currentRoom);
-    const user = room.users.get(socket.id);
-    if (user) user.isTalking = true;
-
-    socket.to(currentRoom).emit('peer-start-talk', {
-      talkerId: socket.id,
-      talkerName: userMeta.name,
-      timestamp: Date.now()
-    });
-    console.log(`[PTT START] ${socket.id} in room ${currentRoom}`);
-  });
-
-  // Relay Audio Chunk (Binary or Base64 Buffer)
-  socket.on('audio-chunk', (chunk) => {
-    if (!currentRoom) return;
-    // Broadcast immediately to paired peer in room
-    socket.to(currentRoom).emit('audio-chunk', {
-      senderId: socket.id,
-      chunk: chunk
-    });
-  });
-
-  // Stop Push-to-Talk
-  socket.on('stop-talk', () => {
-    if (!currentRoom || !rooms.has(currentRoom)) return;
-    const room = rooms.get(currentRoom);
-    const user = room.users.get(socket.id);
-    if (user) user.isTalking = false;
-
-    socket.to(currentRoom).emit('peer-stop-talk', {
-      talkerId: socket.id,
-      timestamp: Date.now()
-    });
-    console.log(`[PTT STOP] ${socket.id} in room ${currentRoom}`);
-  });
-
-  // Leave room manually
-  socket.on('leave-room', () => {
-    if (!currentRoom || !rooms.has(currentRoom)) return;
-    const roomCode = currentRoom;
-    const room = rooms.get(roomCode);
-    
-    if (room) {
-      room.users.delete(socket.id);
-      socket.to(roomCode).emit('peer-left', {
-        peerId: socket.id,
-        isPaired: false
-      });
-      if (room.users.size === 0) {
-        rooms.delete(roomCode);
+  client.on('message', (messageData) => {
+    let data = {};
+    if (typeof messageData === 'string') {
+      try { data = JSON.parse(messageData); } catch (e) {}
+    } else if (Buffer.isBuffer(messageData)) {
+      // Audio binary buffer packet received from raw WebSocket client
+      if (currentRoom && rooms.has(currentRoom)) {
+        const room = rooms.get(currentRoom);
+        room.users.forEach((peer, peerId) => {
+          if (peerId !== client.id) {
+            peer.sendAudio(messageData);
+          }
+        });
       }
+      return;
     }
 
-    socket.leave(roomCode);
-    currentRoom = null;
-    socket.emit('room-left', { success: true });
+    const action = data.action || data.event;
+
+    // Actions: create-room
+    if (action === 'create-room') {
+      const code = data.roomCode || generateRoomCode();
+      const roomData = rooms.get(code) || { code, users: new Map() };
+      roomData.users.set(client.id, client);
+      rooms.set(code, roomData);
+      currentRoom = code;
+
+      console.log(`[Native WS Create] Code: ${code} by ${client.id}`);
+      client.sendJSON({ event: 'room-joined', success: true, roomCode: code, isPaired: false });
+    }
+
+    // Actions: join-room
+    else if (action === 'join-room') {
+      const code = data.roomCode?.trim();
+      if (!code || !rooms.has(code)) {
+        client.sendJSON({ event: 'error-message', success: false, message: 'Invalid Room Code' });
+        return;
+      }
+
+      const roomData = rooms.get(code);
+      if (roomData.users.size >= 2 && !roomData.users.has(client.id)) {
+        client.sendJSON({ event: 'error-message', success: false, message: 'Room Full (1-to-1 max)' });
+        return;
+      }
+
+      roomData.users.set(client.id, client);
+      currentRoom = code;
+
+      console.log(`[Native WS Join] Code: ${code} by ${client.id}`);
+      const isPaired = roomData.users.size === 2;
+      client.sendJSON({ event: 'room-joined', success: true, roomCode: code, isPaired });
+
+      // Notify peer
+      roomData.users.forEach((peer, peerId) => {
+        if (peerId !== client.id) {
+          peer.sendJSON({ event: 'peer-joined', peerId: client.id, isPaired: true });
+        }
+      });
+    }
+
+    // Actions: start-talk
+    else if (action === 'start-talk') {
+      if (!currentRoom || !rooms.has(currentRoom)) return;
+      const room = rooms.get(currentRoom);
+      room.users.forEach((peer, peerId) => {
+        if (peerId !== client.id) {
+          peer.sendJSON({ event: 'peer-start-talk', talkerId: client.id });
+        }
+      });
+    }
+
+    // Actions: stop-talk
+    else if (action === 'stop-talk') {
+      if (!currentRoom || !rooms.has(currentRoom)) return;
+      const room = rooms.get(currentRoom);
+      room.users.forEach((peer, peerId) => {
+        if (peerId !== client.id) {
+          peer.sendJSON({ event: 'peer-stop-talk', talkerId: client.id });
+        }
+      });
+    }
+
+    // Actions: leave-room
+    else if (action === 'leave-room') {
+      if (currentRoom && rooms.has(currentRoom)) {
+        const room = rooms.get(currentRoom);
+        room.users.delete(client.id);
+        room.users.forEach((peer) => {
+          peer.sendJSON({ event: 'peer-left', peerId: client.id, isPaired: false });
+        });
+        if (room.users.size === 0) rooms.delete(currentRoom);
+      }
+      currentRoom = null;
+    }
   });
 
-  // Disconnect handler
-  socket.on('disconnect', () => {
-    console.log(`[-] Client disconnected: ${socket.id}`);
+  client.on('close', () => {
     if (currentRoom && rooms.has(currentRoom)) {
       const room = rooms.get(currentRoom);
-      room.users.delete(socket.id);
-      socket.to(currentRoom).emit('peer-left', {
-        peerId: socket.id,
-        isPaired: false
+      room.users.delete(client.id);
+      room.users.forEach((peer) => {
+        peer.sendJSON({ event: 'peer-left', peerId: client.id, isPaired: false });
       });
-      if (room.users.size === 0) {
-        rooms.delete(currentRoom);
-      }
+      if (room.users.size === 0) rooms.delete(currentRoom);
     }
   });
+}
+
+// 1. Native WebSocket Connection Handler (Apple Watch)
+wss.on('connection', (ws) => {
+  const id = 'ws_' + Math.random().toString(36).substr(2, 9);
+  console.log(`[+] Native WebSocket connected: ${id}`);
+
+  const clientAdapter = {
+    id,
+    type: 'native-ws',
+    sendJSON: (obj) => {
+      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+    },
+    sendAudio: (buffer) => {
+      if (ws.readyState === WebSocket.OPEN) ws.send(buffer);
+    },
+    on: (evt, cb) => {
+      if (evt === 'message') {
+        ws.on('message', (msg) => cb(msg));
+      } else if (evt === 'close') {
+        ws.on('close', cb);
+      }
+    }
+  };
+
+  handleClientMessaging(clientAdapter);
+});
+
+// 2. Socket.io Connection Handler (Web Simulator)
+io.on('connection', (socket) => {
+  console.log(`[+] Socket.io connected: ${socket.id}`);
+
+  const clientAdapter = {
+    id: socket.id,
+    type: 'socket.io',
+    sendJSON: (obj) => socket.emit(obj.event || 'message', obj),
+    sendAudio: (chunk) => socket.emit('audio-chunk', { senderId: socket.id, chunk }),
+    on: (evt, cb) => {
+      if (evt === 'message') {
+        socket.onAny((event, ...args) => {
+          if (event === 'audio-chunk') {
+            cb(args[0]);
+          } else {
+            cb({ action: event, ...args[0] });
+          }
+        });
+      } else if (evt === 'close') {
+        socket.on('disconnect', cb);
+      }
+    }
+  };
+
+  handleClientMessaging(clientAdapter);
 });
 
 // API Info endpoint
 app.get('/api/status', (req, res) => {
   res.json({
     status: 'online',
+    nativeWebSockets: wss.clients.size,
+    socketIO: io.sockets.sockets.size,
     activeRooms: rooms.size,
     timestamp: new Date()
   });
@@ -205,7 +230,8 @@ app.get('/api/status', (req, res) => {
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`====================================================`);
-  console.log(`🚀 Walkie Talkie Relay Server running on port ${PORT}`);
-  console.log(`🌐 Web Simulator Live: http://localhost:${PORT}`);
+  console.log(`🚀 Dual-Protocol Relay Server running on port ${PORT}`);
+  console.log(`📡 Native WebSocket Endpoint: wss://.../`);
+  console.log(`🌐 Socket.io Web Simulator: http://localhost:${PORT}`);
   console.log(`====================================================`);
 });

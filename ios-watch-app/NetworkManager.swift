@@ -14,8 +14,8 @@ class NetworkManager: ObservableObject {
     private var serverURL: URL
     private var roomCode: String?
     
-    init(serverURLString: String = "ws://localhost:3000") {
-        self.serverURL = URL(string: serverURLString) ?? URL(string: "ws://localhost:3000")!
+    init(serverURLString: String = "wss://applepushtotalk-production.up.railway.app") {
+        self.serverURL = URL(string: serverURLString) ?? URL(string: "wss://applepushtotalk-production.up.railway.app")!
     }
     
     func connect() {
