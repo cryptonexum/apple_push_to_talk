@@ -1,46 +1,51 @@
-// Apple Watch 1-to-1 Walkie-Talkie Web Simulator Logic
+// iPhone & Apple Watch Progressive Web App (PWA) Walkie-Talkie
 
-class WatchSimulator {
-  constructor(id, socket) {
-    this.id = id;
+class PhoneWalkieTalkieApp {
+  constructor(socket) {
     this.socket = socket;
     this.roomCode = null;
     this.isTalking = false;
     this.isReceiving = false;
     this.mediaRecorder = null;
-    this.audioChunks = [];
     this.audioContext = null;
     this.analyser = null;
     this.animFrameId = null;
 
     this.initDOM();
     this.bindEvents();
-    this.startClock();
+    this.checkURLRoomCode();
   }
 
   initDOM() {
-    this.setupView = document.getElementById(`setup-view-${this.id}`);
-    this.talkView = document.getElementById(`talk-view-${this.id}`);
-    this.codeInput = document.getElementById(`code-input-${this.id}`);
-    this.btnCreate = document.getElementById(`btn-create-${this.id}`);
-    this.btnJoin = document.getElementById(`btn-join-${this.id}`);
-    this.btnDisconnect = document.getElementById(`btn-disconnect-${this.id}`);
-    this.pttBtn = document.getElementById(`ptt-btn-${this.id}`);
-    this.pttLabel = document.getElementById(`ptt-label-${this.id}`);
-    this.peerInd = document.getElementById(`peer-ind-${this.id}`);
-    this.badgeCode = document.getElementById(`badge-code-${this.id}`);
-    this.canvas = document.getElementById(`canvas-${this.id}`);
+    this.pwaStatus = document.getElementById('pwa-status');
+    this.phoneSetup = document.getElementById('phone-setup');
+    this.phoneTalk = document.getElementById('phone-talk');
+    this.codeInput = document.getElementById('phone-code-input');
+    this.btnPublic = document.getElementById('btn-join-public');
+    this.btnCreate = document.getElementById('phone-btn-create');
+    this.btnJoin = document.getElementById('phone-btn-join');
+    this.btnLeave = document.getElementById('phone-btn-leave');
+    this.btnShare = document.getElementById('btn-share-room');
+    this.codeDisplay = document.getElementById('phone-code-display');
+    this.peerBadge = document.getElementById('phone-peer-badge');
+    this.peerStatus = document.getElementById('phone-peer-status');
+    this.pttBtn = document.getElementById('phone-ptt-btn');
+    this.pttLabel = document.getElementById('phone-ptt-label');
+    this.pttSubtext = document.getElementById('phone-ptt-subtext');
+    this.canvas = document.getElementById('phone-canvas');
     this.canvasCtx = this.canvas.getContext('2d');
-    this.timeDisplay = document.getElementById(`time-${this.id}`);
-    this.crownBtn = document.getElementById(`crown-${this.id}`);
   }
 
   bindEvents() {
+    if (this.btnPublic) {
+      this.btnPublic.addEventListener('click', () => this.joinPublicChannel());
+    }
     this.btnCreate.addEventListener('click', () => this.createRoom());
     this.btnJoin.addEventListener('click', () => this.joinRoom());
-    this.btnDisconnect.addEventListener('click', () => this.leaveRoom());
+    this.btnLeave.addEventListener('click', () => this.leaveRoom());
+    this.btnShare.addEventListener('click', () => this.shareRoomLink());
 
-    // Push To Talk button events (Hold to talk)
+    // Push-to-Talk touch & mouse hold events
     const startPTT = (e) => {
       e.preventDefault();
       if (this.pttBtn.disabled || this.isTalking || this.isReceiving) return;
@@ -58,24 +63,24 @@ class WatchSimulator {
     this.pttBtn.addEventListener('mouseup', stopPTT);
     this.pttBtn.addEventListener('mouseleave', stopPTT);
 
-    this.pttBtn.addEventListener('touchstart', startPTT);
-    this.pttBtn.addEventListener('touchend', stopPTT);
-
-    // Crown click easter egg / vibration
-    this.crownBtn.addEventListener('click', () => {
-      this.playBeep(800, 0.05);
-    });
+    this.pttBtn.addEventListener('touchstart', startPTT, { passive: false });
+    this.pttBtn.addEventListener('touchend', stopPTT, { passive: false });
+    this.pttBtn.addEventListener('touchcancel', stopPTT, { passive: false });
   }
 
-  startClock() {
-    const updateTime = () => {
-      const now = new Date();
-      const hrs = String(now.getHours()).padStart(2, '0');
-      const mins = String(now.getMinutes()).padStart(2, '0');
-      this.timeDisplay.textContent = `${hrs}:${mins}`;
-    };
-    updateTime();
-    setInterval(updateTime, 10000);
+  checkURLRoomCode() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const roomParam = urlParams.get('room');
+    if (roomParam && roomParam.length === 6) {
+      this.codeInput.value = roomParam;
+      setTimeout(() => this.joinRoom(), 500);
+    }
+  }
+
+  vibrate(pattern = [25]) {
+    if (navigator.vibrate) {
+      navigator.vibrate(pattern);
+    }
   }
 
   async initAudioContext() {
@@ -108,63 +113,95 @@ class WatchSimulator {
     }
   }
 
+  joinPublicChannel() {
+    this.vibrate([20]);
+    this.codeInput.value = '369000';
+    this.joinRoom('369000');
+  }
+
   createRoom() {
-    this.socket.emit('create-room', { name: `Watch Client ${this.id}` }, (res) => {
-      if (res.success) {
+    this.vibrate([15]);
+    this.socket.emit('create-room', { deviceType: 'iPhone PWA' }, (res) => {
+      if (res && res.success) {
         this.roomCode = res.roomCode;
         this.showTalkView(res.isPaired);
-      } else {
-        alert(res.message || 'Error creating channel');
       }
     });
   }
 
-  joinRoom() {
-    const code = this.codeInput.value.trim();
-    if (!code || code.length !== 6) {
-      alert('Please enter a valid 6-digit channel code');
-      return;
-    }
-    this.socket.emit('join-room', { roomCode: code, name: `Watch Client ${this.id}` }, (res) => {
-      if (res.success) {
+  joinRoom(targetCode) {
+    this.vibrate([15]);
+    const code = targetCode || this.codeInput.value.trim() || '369000';
+    this.socket.emit('join-room', { roomCode: code, deviceType: 'iPhone PWA' }, (res) => {
+      if (res && res.success) {
         this.roomCode = res.roomCode;
-        this.showTalkView(res.isPaired);
-      } else {
+        this.showTalkView(res.isPaired || res.isPublic);
+      } else if (res && !res.success) {
         alert(res.message || 'Failed to join channel');
       }
     });
   }
 
+  onRoomJoinedEvent(res) {
+    if (res && res.success) {
+      this.roomCode = res.roomCode;
+      this.showTalkView(res.isPaired || res.isPublic);
+    }
+  }
+
   showTalkView(isPaired) {
-    this.setupView.classList.remove('active');
-    this.talkView.classList.add('active');
-    this.badgeCode.textContent = `#${this.roomCode}`;
+    this.phoneSetup.classList.add('hidden');
+    this.phoneTalk.classList.remove('hidden');
+    this.codeDisplay.textContent = `#${this.roomCode}`;
     this.updatePairState(isPaired);
   }
 
   updatePairState(isPaired) {
-    if (isPaired) {
-      this.peerInd.innerHTML = '🟢 Paired';
-      this.peerInd.style.color = '#3fb950';
+    const isPublic = this.roomCode === '369000';
+    if (isPublic) {
+      this.peerBadge.innerHTML = '<span class="status-indicator-dot paired"></span> Global Public Channel #369000';
       this.pttBtn.disabled = false;
-      this.pttBtn.className = 'ptt-button ready';
-      this.pttLabel.textContent = 'TALK';
+      this.pttBtn.className = 'pwa-ptt-button ready';
+      this.pttLabel.textContent = 'HOLD TO TALK';
+      this.pttSubtext.textContent = 'Public Broadcast';
+    } else if (isPaired) {
+      this.peerBadge.innerHTML = '<span class="status-indicator-dot paired"></span> Paired with Friend';
+      this.pttBtn.disabled = false;
+      this.pttBtn.className = 'pwa-ptt-button ready';
+      this.pttLabel.textContent = 'HOLD TO TALK';
+      this.pttSubtext.textContent = 'Press & Speak';
     } else {
-      this.peerInd.innerHTML = '🟡 Waiting...';
-      this.peerInd.style.color = '#e3b341';
+      this.peerBadge.innerHTML = '<span class="status-indicator-dot waiting"></span> Waiting for friend to join...';
       this.pttBtn.disabled = true;
-      this.pttBtn.className = 'ptt-button';
+      this.pttBtn.className = 'pwa-ptt-button';
       this.pttLabel.textContent = 'WAITING';
+      this.pttSubtext.textContent = 'Share Code Below';
+    }
+  }
+
+  shareRoomLink() {
+    const link = `${window.location.origin}${window.location.pathname}?room=${this.roomCode}`;
+    if (navigator.share) {
+      navigator.share({
+        title: 'Walkie-Talkie Channel',
+        text: `Join my Walkie-Talkie channel #${this.roomCode} to talk!`,
+        url: link
+      }).catch(() => {});
+    } else {
+      navigator.clipboard.writeText(link);
+      alert(`Channel Link copied to clipboard!\n\n${link}`);
     }
   }
 
   async startTalking() {
     await this.initAudioContext();
-    this.playBeep(880, 0.1); // Chirp on talk start
+    this.vibrate([40]);
+    this.playBeep(880, 0.1);
     this.isTalking = true;
 
-    this.pttBtn.className = 'ptt-button talking';
+    this.pttBtn.className = 'pwa-ptt-button talking';
     this.pttLabel.textContent = 'TALKING';
+    this.pttSubtext.textContent = 'Release when done';
 
     this.socket.emit('start-talk');
 
@@ -187,12 +224,10 @@ class WatchSimulator {
         }
       };
 
-      // Send audio chunk slice every 150ms for live low-latency streaming
       this.mediaRecorder.start(150);
       this.activeStream = stream;
     } catch (err) {
-      console.error('Microphone error:', err);
-      // Fallback synthetic voice tone if mic permission denied
+      console.error('Microphone access denied:', err);
       this.drawSyntheticWaveform();
     }
   }
@@ -200,7 +235,8 @@ class WatchSimulator {
   stopTalking() {
     if (!this.isTalking) return;
     this.isTalking = false;
-    this.playBeep(440, 0.1); // Chirp on talk stop
+    this.vibrate([20]);
+    this.playBeep(440, 0.1);
 
     if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
       this.mediaRecorder.stop();
@@ -221,14 +257,17 @@ class WatchSimulator {
 
   onPeerStartTalk() {
     this.isReceiving = true;
+    this.vibrate([30, 30]);
     this.playBeep(700, 0.08);
-    this.pttBtn.className = 'ptt-button receiving';
+    this.pttBtn.className = 'pwa-ptt-button receiving';
     this.pttLabel.textContent = 'LISTENING';
+    this.pttSubtext.textContent = 'Incoming Broadcast...';
     this.drawReceivingWaveform();
   }
 
   onPeerStopTalk() {
     this.isReceiving = false;
+    this.vibrate([20]);
     this.playBeep(350, 0.08);
     if (this.animFrameId) {
       cancelAnimationFrame(this.animFrameId);
@@ -240,7 +279,6 @@ class WatchSimulator {
   async onIncomingAudioChunk(base64Chunk) {
     try {
       await this.initAudioContext();
-      // Decode audio chunk blob and play via Web Audio API
       const res = await fetch(base64Chunk);
       const arrayBuffer = await res.arrayBuffer();
       
@@ -249,19 +287,16 @@ class WatchSimulator {
         source.buffer = buffer;
         source.connect(this.audioContext.destination);
         source.start(0);
-      }, (err) => {
-        // Fallback for raw byte streams
       });
-    } catch (e) {
-      console.log('Audio decode fallback:', e);
-    }
+    } catch (e) {}
   }
 
   leaveRoom() {
+    this.vibrate([15]);
     this.socket.emit('leave-room');
     if (this.isTalking) this.stopTalking();
-    this.talkView.classList.remove('active');
-    this.setupView.classList.add('active');
+    this.phoneTalk.classList.add('hidden');
+    this.phoneSetup.classList.remove('hidden');
     this.codeInput.value = '';
     this.roomCode = null;
   }
@@ -278,7 +313,7 @@ class WatchSimulator {
 
     for (let i = 0; i < bufferLength; i++) {
       const barHeight = (dataArray[i] / 255) * this.canvas.height;
-      this.canvasCtx.fillStyle = '#3fb950';
+      this.canvasCtx.fillStyle = '#f7630c';
       this.canvasCtx.fillRect(x, this.canvas.height - barHeight, barWidth - 1, barHeight);
       x += barWidth;
     }
@@ -293,9 +328,9 @@ class WatchSimulator {
     const time = Date.now() * 0.01;
     this.canvasCtx.fillStyle = '#58a6ff';
 
-    for (let x = 0; x < this.canvas.width; x += 4) {
+    for (let x = 0; x < this.canvas.width; x += 6) {
       const height = Math.abs(Math.sin(time + x * 0.1)) * (this.canvas.height - 4) + 2;
-      this.canvasCtx.fillRect(x, (this.canvas.height - height) / 2, 2, height);
+      this.canvasCtx.fillRect(x, (this.canvas.height - height) / 2, 3, height);
     }
 
     this.animFrameId = requestAnimationFrame(() => this.drawReceivingWaveform());
@@ -306,47 +341,61 @@ class WatchSimulator {
   }
 }
 
-// Global App Initialization
+// Global Initialization
 document.addEventListener('DOMContentLoaded', () => {
   const socket = io();
 
-  const serverStatusPill = document.getElementById('server-status');
+  const statusPill = document.getElementById('pwa-status');
+  const btnToggleSim = document.getElementById('btn-toggle-sim');
+  const phoneView = document.getElementById('phone-view');
+  const simView = document.getElementById('simulator-view');
 
   socket.on('connect', () => {
-    serverStatusPill.innerHTML = '<span class="status-dot online"></span> Server Online';
+    statusPill.innerHTML = '<span class="dot online"></span> Server Online';
   });
 
   socket.on('disconnect', () => {
-    serverStatusPill.innerHTML = '<span class="status-dot offline"></span> Server Offline';
+    statusPill.innerHTML = '<span class="dot offline"></span> Server Offline';
   });
 
-  // Instantiate 2 watch clients in the simulator
-  const watchA = new WatchSimulator(1, socket);
-  const watchB = new WatchSimulator(2, socket);
+  // Toggle View Mode (iPhone PWA vs Dual Watch Sim)
+  btnToggleSim.addEventListener('click', () => {
+    if (simView.classList.contains('hidden')) {
+      simView.classList.remove('hidden');
+      phoneView.classList.add('hidden');
+      btnToggleSim.textContent = '📱 Phone';
+    } else {
+      simView.classList.add('hidden');
+      phoneView.classList.remove('hidden');
+      btnToggleSim.textContent = '⌚ Sim';
+    }
+  });
 
-  // Router for Socket events to proper simulator based on room state
+  // Initialize iPhone Walkie Talkie App
+  const phoneApp = new PhoneWalkieTalkieApp(socket);
+
+  // Global socket message router
+  socket.on('room-joined', (res) => {
+    phoneApp.onRoomJoinedEvent(res);
+  });
+
   socket.on('peer-joined', (data) => {
-    if (watchA.roomCode) watchA.updatePairState(data.isPaired);
-    if (watchB.roomCode) watchB.updatePairState(data.isPaired);
+    if (phoneApp.roomCode) phoneApp.updatePairState(data.isPaired || data.isPublic);
   });
 
   socket.on('peer-left', (data) => {
-    if (watchA.roomCode) watchA.updatePairState(false);
-    if (watchB.roomCode) watchB.updatePairState(false);
+    if (phoneApp.roomCode && phoneApp.roomCode !== '369000') phoneApp.updatePairState(false);
   });
 
   socket.on('peer-start-talk', (data) => {
-    if (watchA.roomCode && data.talkerId !== socket.id) watchA.onPeerStartTalk();
-    if (watchB.roomCode && data.talkerId !== socket.id) watchB.onPeerStartTalk();
+    if (phoneApp.roomCode && data.talkerId !== socket.id) phoneApp.onPeerStartTalk();
   });
 
   socket.on('peer-stop-talk', (data) => {
-    if (watchA.roomCode) watchA.onPeerStopTalk();
-    if (watchB.roomCode) watchB.onPeerStopTalk();
+    if (phoneApp.roomCode) phoneApp.onPeerStopTalk();
   });
 
   socket.on('audio-chunk', (data) => {
-    if (watchA.roomCode && data.senderId !== socket.id) watchA.onIncomingAudioChunk(data.chunk);
-    if (watchB.roomCode && data.senderId !== socket.id) watchB.onIncomingAudioChunk(data.chunk);
+    if (phoneApp.roomCode && data.senderId !== socket.id) phoneApp.onIncomingAudioChunk(data.chunk);
   });
 });
