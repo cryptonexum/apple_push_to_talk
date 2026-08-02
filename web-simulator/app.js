@@ -10,10 +10,13 @@ class PhoneWalkieTalkieApp {
     this.audioContext = null;
     this.analyser = null;
     this.animFrameId = null;
+    this.nextPlayTime = 0;
+    this.isAudioUnlocked = false;
 
     this.initDOM();
     this.bindEvents();
     this.checkURLRoomCode();
+    this.setupAudioUnlockListener();
   }
 
   initDOM() {
@@ -48,6 +51,7 @@ class PhoneWalkieTalkieApp {
     // Push-to-Talk touch & mouse hold events
     const startPTT = (e) => {
       e.preventDefault();
+      this.unlockAudioContext();
       if (this.pttBtn.disabled || this.isTalking || this.isReceiving) return;
       this.startTalking();
     };
@@ -68,6 +72,38 @@ class PhoneWalkieTalkieApp {
     this.pttBtn.addEventListener('touchcancel', stopPTT, { passive: false });
   }
 
+  setupAudioUnlockListener() {
+    const unlock = () => {
+      this.unlockAudioContext();
+      document.removeEventListener('touchstart', unlock);
+      document.removeEventListener('click', unlock);
+    };
+    document.addEventListener('touchstart', unlock, { once: true });
+    document.addEventListener('click', unlock, { once: true });
+  }
+
+  async unlockAudioContext() {
+    if (!this.audioContext) {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      this.audioContext = new AudioCtx({ latencyHint: 'interactive' });
+      this.analyser = this.audioContext.createAnalyser();
+      this.analyser.fftSize = 64;
+    }
+    if (this.audioContext.state === 'suspended') {
+      await this.audioContext.resume();
+    }
+    if (!this.isAudioUnlocked) {
+      // Play 0.01s silent buffer to warm up iOS Safari speaker output
+      const buffer = this.audioContext.createBuffer(1, 1, 22050);
+      const source = this.audioContext.createBufferSource();
+      source.buffer = buffer;
+      source.connect(this.audioContext.destination);
+      source.start(0);
+      this.isAudioUnlocked = true;
+      console.log('[Audio] Safari AudioContext unlocked successfully');
+    }
+  }
+
   checkURLRoomCode() {
     const urlParams = new URLSearchParams(window.location.search);
     const roomParam = urlParams.get('room');
@@ -83,26 +119,14 @@ class PhoneWalkieTalkieApp {
     }
   }
 
-  async initAudioContext() {
-    if (!this.audioContext) {
-      const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      this.audioContext = new AudioCtx();
-      this.analyser = this.audioContext.createAnalyser();
-      this.analyser.fftSize = 64;
-    }
-    if (this.audioContext.state === 'suspended') {
-      await this.audioContext.resume();
-    }
-  }
-
   playBeep(freq = 600, duration = 0.08) {
     try {
-      this.initAudioContext();
+      this.unlockAudioContext();
       const osc = this.audioContext.createOscillator();
       const gain = this.audioContext.createGain();
       osc.type = 'sine';
       osc.frequency.setValueAtTime(freq, this.audioContext.currentTime);
-      gain.gain.setValueAtTime(0.15, this.audioContext.currentTime);
+      gain.gain.setValueAtTime(0.2, this.audioContext.currentTime);
       gain.gain.exponentialRampToValueAtTime(0.001, this.audioContext.currentTime + duration);
       osc.connect(gain);
       gain.connect(this.audioContext.destination);
@@ -114,12 +138,14 @@ class PhoneWalkieTalkieApp {
   }
 
   joinPublicChannel() {
+    this.unlockAudioContext();
     this.vibrate([20]);
     this.codeInput.value = '369000';
     this.joinRoom('369000');
   }
 
   createRoom() {
+    this.unlockAudioContext();
     this.vibrate([15]);
     this.socket.emit('create-room', { deviceType: 'iPhone PWA' }, (res) => {
       if (res && res.success) {
@@ -130,6 +156,7 @@ class PhoneWalkieTalkieApp {
   }
 
   joinRoom(targetCode) {
+    this.unlockAudioContext();
     this.vibrate([15]);
     const code = targetCode || this.codeInput.value.trim() || '369000';
     this.socket.emit('join-room', { roomCode: code, deviceType: 'iPhone PWA' }, (res) => {
@@ -194,7 +221,7 @@ class PhoneWalkieTalkieApp {
   }
 
   async startTalking() {
-    await this.initAudioContext();
+    await this.unlockAudioContext();
     this.vibrate([40]);
     this.playBeep(880, 0.1);
     this.isTalking = true;
@@ -206,15 +233,35 @@ class PhoneWalkieTalkieApp {
     this.socket.emit('start-talk');
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        }
+      });
+
       const source = this.audioContext.createMediaStreamSource(stream);
       source.connect(this.analyser);
       this.drawWaveform();
 
-      this.mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
+      // Universal audio recording format compatible across iOS Safari & Android & Desktop
+      let mimeType = 'audio/webm;codecs=opus';
+      if (!MediaRecorder.isTypeSupported(mimeType)) {
+        if (MediaRecorder.isTypeSupported('audio/mp4')) {
+          mimeType = 'audio/mp4';
+        } else if (MediaRecorder.isTypeSupported('audio/aac')) {
+          mimeType = 'audio/aac';
+        } else {
+          mimeType = '';
+        }
+      }
+
+      const options = mimeType ? { mimeType } : {};
+      this.mediaRecorder = new MediaRecorder(stream, options);
       
       this.mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0 && this.isTalking) {
+        if (event.data && event.data.size > 0 && this.isTalking) {
           const reader = new FileReader();
           reader.onloadend = () => {
             const base64Data = reader.result;
@@ -224,10 +271,11 @@ class PhoneWalkieTalkieApp {
         }
       };
 
-      this.mediaRecorder.start(150);
+      // Stream audio chunk every 200ms
+      this.mediaRecorder.start(200);
       this.activeStream = stream;
     } catch (err) {
-      console.error('Microphone access denied:', err);
+      console.error('Microphone access error:', err);
       this.drawSyntheticWaveform();
     }
   }
@@ -257,6 +305,8 @@ class PhoneWalkieTalkieApp {
 
   onPeerStartTalk() {
     this.isReceiving = true;
+    this.nextPlayTime = 0; // Reset audio queue timing
+    this.unlockAudioContext();
     this.vibrate([30, 30]);
     this.playBeep(700, 0.08);
     this.pttBtn.className = 'pwa-ptt-button receiving';
@@ -278,17 +328,32 @@ class PhoneWalkieTalkieApp {
 
   async onIncomingAudioChunk(base64Chunk) {
     try {
-      await this.initAudioContext();
-      const res = await fetch(base64Chunk);
-      const arrayBuffer = await res.arrayBuffer();
+      await this.unlockAudioContext();
       
+      // Fetch binary data from base64 data URI
+      const response = await fetch(base64Chunk);
+      const arrayBuffer = await response.arrayBuffer();
+
+      // Decode audio data into AudioBuffer
       this.audioContext.decodeAudioData(arrayBuffer, (buffer) => {
         const source = this.audioContext.createBufferSource();
         source.buffer = buffer;
         source.connect(this.audioContext.destination);
-        source.start(0);
+
+        // Schedule smooth gapless playback
+        const currentTime = this.audioContext.currentTime;
+        if (this.nextPlayTime < currentTime) {
+          this.nextPlayTime = currentTime;
+        }
+
+        source.start(this.nextPlayTime);
+        this.nextPlayTime += buffer.duration;
+      }, (decodeErr) => {
+        console.log('Audio chunk decode warning:', decodeErr);
       });
-    } catch (e) {}
+    } catch (e) {
+      console.error('Audio chunk error:', e);
+    }
   }
 
   leaveRoom() {
