@@ -83,7 +83,7 @@ io.on('connection', (socket) => {
     roomData.users.set(socket.id, {
       type: 'socket.io',
       sendJSON: (obj) => socket.emit(obj.event || 'message', obj),
-      sendAudio: (chunk) => socket.emit('audio-chunk', { senderId: socket.id, chunk })
+      sendAudio: (audioPayload) => socket.emit('audio-chunk', { senderId: socket.id, audioPayload })
     });
     rooms.set(code, roomData);
     socket.join(code);
@@ -98,7 +98,6 @@ io.on('connection', (socket) => {
   socket.on('join-room', (data, callback) => {
     const code = data?.roomCode?.trim() || PUBLIC_CHANNEL_CODE;
     
-    // Auto-create room if public channel or valid 6-digit code
     if (!rooms.has(code)) {
       if (code === PUBLIC_CHANNEL_CODE) {
         rooms.set(PUBLIC_CHANNEL_CODE, { isPublic: true, users: new Map() });
@@ -109,7 +108,6 @@ io.on('connection', (socket) => {
 
     const roomData = rooms.get(code);
     
-    // 1-to-1 enforcement for private rooms (non-public)
     if (!roomData.isPublic && roomData.users.size >= 2 && !roomData.users.has(socket.id)) {
       const err = { success: false, message: 'Private channel is full (1-to-1 max)' };
       if (typeof callback === 'function') callback(err);
@@ -120,7 +118,7 @@ io.on('connection', (socket) => {
     roomData.users.set(socket.id, {
       type: 'socket.io',
       sendJSON: (obj) => socket.emit(obj.event || 'message', obj),
-      sendAudio: (chunk) => socket.emit('audio-chunk', { senderId: socket.id, chunk })
+      sendAudio: (audioPayload) => socket.emit('audio-chunk', { senderId: socket.id, audioPayload })
     });
     socket.join(code);
     currentRoom = code;
@@ -149,12 +147,12 @@ io.on('connection', (socket) => {
     });
   });
 
-  socket.on('audio-chunk', (chunk) => {
+  socket.on('audio-chunk', (audioPayload) => {
     if (!currentRoom || !rooms.has(currentRoom)) return;
     const room = rooms.get(currentRoom);
     room.users.forEach((peer, peerId) => {
       if (peerId !== socket.id) {
-        peer.sendAudio(chunk);
+        peer.sendAudio(audioPayload);
       }
     });
   });
@@ -339,6 +337,5 @@ server.listen(PORT, () => {
   console.log(`====================================================`);
   console.log(`🚀 Dual-Protocol Relay Server running on port ${PORT}`);
   console.log(`🌐 Public Channel Code: ${PUBLIC_CHANNEL_CODE}`);
-  console.log(`📡 Native WebSocket Endpoint: wss://.../`);
   console.log(`====================================================`);
 });

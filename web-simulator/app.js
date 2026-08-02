@@ -86,9 +86,14 @@ class PhoneWalkieTalkieApp {
   async unlockAudioContext() {
     if (!this.audioContext) {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      this.audioContext = new AudioCtx({ sampleRate: 22050, latencyHint: 'interactive' });
+      this.audioContext = new AudioCtx({ latencyHint: 'interactive' });
       this.analyser = this.audioContext.createAnalyser();
       this.analyser.fftSize = 64;
+
+      // Master Gain Boost Node (Volume multiplier = 4.0)
+      this.gainNode = this.audioContext.createGain();
+      this.gainNode.gain.setValueAtTime(4.0, this.audioContext.currentTime);
+      this.gainNode.connect(this.audioContext.destination);
     }
     if (this.audioContext.state === 'suspended') {
       await this.audioContext.resume();
@@ -97,10 +102,10 @@ class PhoneWalkieTalkieApp {
       const buffer = this.audioContext.createBuffer(1, 1, 22050);
       const source = this.audioContext.createBufferSource();
       source.buffer = buffer;
-      source.connect(this.audioContext.destination);
+      source.connect(this.gainNode);
       source.start(0);
       this.isAudioUnlocked = true;
-      console.log('[Audio Engine] AudioContext ready & unlocked');
+      console.log('[Audio Engine] Speaker Output Unlocked');
     }
   }
 
@@ -129,7 +134,7 @@ class PhoneWalkieTalkieApp {
       gain.gain.setValueAtTime(0.2, this.audioContext.currentTime);
       gain.gain.exponentialRampToValueAtTime(0.001, this.audioContext.currentTime + duration);
       osc.connect(gain);
-      gain.connect(this.audioContext.destination);
+      gain.connect(this.gainNode);
       osc.start();
       osc.stop(this.audioContext.currentTime + duration);
     } catch (err) {}
@@ -218,7 +223,7 @@ class PhoneWalkieTalkieApp {
     }
   }
 
-  // Raw PCM Real-Time Audio Capture Engine
+  // Real-Time High Performance Int16 PCM Audio Streamer
   async startTalking() {
     await this.unlockAudioContext();
     this.vibrate([40]);
@@ -244,7 +249,6 @@ class PhoneWalkieTalkieApp {
       source.connect(this.analyser);
       this.drawWaveform();
 
-      // Use ScriptProcessor for raw PCM Float32 audio streaming
       const bufferSize = 2048;
       this.scriptProcessor = this.audioContext.createScriptProcessor(bufferSize, 1, 1);
 
@@ -252,16 +256,25 @@ class PhoneWalkieTalkieApp {
         if (!this.isTalking) return;
         const inputData = e.inputBuffer.getChannelData(0);
         
-        // Convert Float32 PCM array to Array for socket transmission
-        const pcmArray = Array.from(inputData);
-        this.socket.emit('audio-chunk', { pcm: pcmArray, sampleRate: this.audioContext.sampleRate });
+        // Convert Float32 (-1.0 to 1.0) to Int16 (-32768 to 32767) binary buffer
+        const int16Array = new Int16Array(inputData.length);
+        for (let i = 0; i < inputData.length; i++) {
+          let s = Math.max(-1, Math.min(1, inputData[i]));
+          int16Array[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+        }
+
+        // Send binary ArrayBuffer over socket
+        this.socket.emit('audio-chunk', {
+          pcm: int16Array.buffer,
+          sampleRate: this.audioContext.sampleRate
+        });
       };
 
       source.connect(this.scriptProcessor);
       this.scriptProcessor.connect(this.audioContext.destination);
 
     } catch (err) {
-      console.error('Microphone capture error:', err);
+      console.error('Microphone error:', err);
       this.drawSyntheticWaveform();
     }
   }
@@ -293,7 +306,7 @@ class PhoneWalkieTalkieApp {
 
   onPeerStartTalk() {
     this.isReceiving = true;
-    this.nextPlayTime = 0; // Reset queue time for clean low latency
+    this.nextPlayTime = 0;
     this.unlockAudioContext();
     this.vibrate([30, 30]);
     this.playBeep(700, 0.08);
@@ -314,33 +327,45 @@ class PhoneWalkieTalkieApp {
     this.updatePairState(true);
   }
 
-  // Raw PCM Real-Time Audio Playback Engine
-  async onIncomingAudioChunk(data) {
+  // Real-Time High Performance Int16 PCM Audio Playback Engine
+  async onIncomingAudioChunk(payload) {
     try {
       await this.unlockAudioContext();
-      
-      let pcmSamples = null;
-      let sampleRate = 22050;
 
-      if (data && data.pcm) {
-        pcmSamples = data.pcm;
-        sampleRate = data.sampleRate || 22050;
+      const audioData = payload?.audioPayload || payload;
+      let rawBuffer = audioData?.pcm;
+      let sampleRate = audioData?.sampleRate || 22050;
+
+      if (!rawBuffer) return;
+
+      // Handle ArrayBuffer or Socket.io binary buffer payload
+      let int16Array;
+      if (rawBuffer instanceof ArrayBuffer) {
+        int16Array = new Int16Array(rawBuffer);
+      } else if (rawBuffer.data) {
+        int16Array = new Int16Array(new Uint8Array(rawBuffer.data).buffer);
+      } else {
+        int16Array = new Int16Array(rawBuffer);
       }
 
-      if (!pcmSamples || pcmSamples.length === 0) return;
+      if (int16Array.length === 0) return;
 
-      // Create Web Audio PCM buffer directly from float samples
-      const audioBuffer = this.audioContext.createBuffer(1, pcmSamples.length, sampleRate);
+      // Create Web Audio PCM buffer
+      const audioBuffer = this.audioContext.createBuffer(1, int16Array.length, sampleRate);
       const channelData = audioBuffer.getChannelData(0);
-      for (let i = 0; i < pcmSamples.length; i++) {
-        channelData[i] = pcmSamples[i];
+
+      // Convert Int16 back to Float32 sample
+      for (let i = 0; i < int16Array.length; i++) {
+        channelData[i] = int16Array[i] / (int16Array[i] < 0 ? 32768 : 32767);
       }
 
       const source = this.audioContext.createBufferSource();
       source.buffer = audioBuffer;
-      source.connect(this.audioContext.destination);
 
-      // Gapless audio scheduling
+      // Connect to Volume Gain Booster -> Speaker Output
+      source.connect(this.gainNode);
+
+      // Gapless scheduling
       const now = this.audioContext.currentTime;
       if (this.nextPlayTime < now) {
         this.nextPlayTime = now;
@@ -459,6 +484,6 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   socket.on('audio-chunk', (data) => {
-    if (phoneApp.roomCode && data.senderId !== socket.id) phoneApp.onIncomingAudioChunk(data.chunk);
+    if (phoneApp.roomCode && data.senderId !== socket.id) phoneApp.onIncomingAudioChunk(data.audioPayload || data);
   });
 });
