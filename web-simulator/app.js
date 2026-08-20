@@ -14,6 +14,7 @@ class WalkieTalkieVoIP {
     this.socket = socket;
     this.roomCode = null;
     this.isTalking = false;
+    this.pttMode = 'hold';             // 'hold' | 'toggle'
     this.peerConnections = new Map();
     this.localStream = null;
     this.audioEnabled = false;
@@ -89,26 +90,58 @@ class WalkieTalkieVoIP {
     document.getElementById('phone-btn-join')?.addEventListener('click', () => this.joinRoom());
     document.getElementById('phone-btn-leave')?.addEventListener('click', () => this.leaveRoom());
     document.getElementById('btn-share-room')?.addEventListener('click', () => this.shareLink());
-    document.getElementById('btn-toggle-sim')?.addEventListener('click', () => {
-      const sim = document.getElementById('simulator-view');
-      const ph  = document.getElementById('phone-view');
-      const btn = document.getElementById('btn-toggle-sim');
-      const showing = !sim.classList.contains('hidden');
-      sim.classList.toggle('hidden', showing);
-      ph.classList.toggle('hidden', !showing);
-      btn.textContent = showing ? '⌚ Sim' : '📱 Phone';
+
+    // ── Mode toggle switch ──
+    document.getElementById('ptt-mode-switch')?.addEventListener('change', (e) => {
+      this.setPttMode(e.target.checked ? 'toggle' : 'hold');
     });
 
-    const onDown = (e) => { e.preventDefault(); this.startTalk(); };
-    const onUp   = (e) => { e.preventDefault(); this.stopTalk(); };
+    // ── Hold mode: press-and-hold ──
+    const onDown = (e) => {
+      e.preventDefault();
+      if (this.pttMode === 'hold') this.startTalk();
+    };
+    const onUp = (e) => {
+      e.preventDefault();
+      if (this.pttMode === 'hold' && this.isTalking) this.stopTalk();
+    };
+
+    // ── Toggle mode: single tap ──
+    const onToggleTap = (e) => {
+      e.preventDefault();
+      if (this.pttMode !== 'toggle') return;
+      if (this.isTalking) this.stopTalk();
+      else this.startTalk();
+    };
 
     this.pttBtn.addEventListener('mousedown',   onDown);
     this.pttBtn.addEventListener('mouseup',     onUp);
     this.pttBtn.addEventListener('mouseleave',  onUp);
-    this.pttBtn.addEventListener('touchstart',  onDown, { passive: false });
-    this.pttBtn.addEventListener('touchend',    onUp,   { passive: false });
-    this.pttBtn.addEventListener('touchcancel', onUp,   { passive: false });
+    this.pttBtn.addEventListener('touchstart',  onDown,      { passive: false });
+    this.pttBtn.addEventListener('touchend',    onToggleTap, { passive: false });
+    this.pttBtn.addEventListener('touchcancel', onUp,        { passive: false });
+    // Desktop click for toggle mode
+    this.pttBtn.addEventListener('click', (e) => {
+      if (this.pttMode === 'toggle') onToggleTap(e);
+    });
   }
+
+  // ─── Switch PTT mode ────────────────────────────────────────────────────────
+  setPttMode(mode) {
+    if (this.isTalking) this.stopTalk();
+    this.pttMode = mode;
+
+    // Sync checkbox state
+    const sw = document.getElementById('ptt-mode-switch');
+    if (sw) sw.checked = mode === 'toggle';
+
+    // Update main button label + subtext (only when idle/ready)
+    if (this.pttLabel && this.pttBtn && !this.pttBtn.disabled && !this.isTalking) {
+      this.pttLabel.textContent = mode === 'toggle' ? 'TAP TO TALK' : 'HOLD TO TALK';
+      this.pttSub.textContent   = mode === 'toggle' ? 'Tap to start' : 'Hold & speak';
+    }
+  }
+
 
   // ─── Socket Signaling Events ────────────────────────────────────────────────
   bindSocketEvents() {
@@ -199,7 +232,16 @@ class WalkieTalkieVoIP {
   async initMicrophone() {
     try {
       this.localStream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, sampleRate: 48000 },
+        audio: {
+          echoCancellation:       { ideal: true },
+          noiseSuppression:       { ideal: true },
+          autoGainControl:        { ideal: true },
+          googEchoCancellation:   true,   // Chrome/Chromium extra
+          googNoiseSuppression:   true,
+          googAutoGainControl:    true,
+          googHighpassFilter:     true,
+          sampleRate:             48000,
+        },
         video: false
       });
       this.setMicMute(true); // start muted
@@ -343,18 +385,22 @@ class WalkieTalkieVoIP {
 
   setPaired(paired) {
     const pub = this.roomCode === '369000';
+    const isToggle = this.pttMode === 'toggle';
+    const readyLabel = isToggle ? 'TAP TO TALK' : 'HOLD TO TALK';
+    const readySub   = isToggle ? 'Tap to start' : 'Hold & speak';
+
     if (pub) {
       this.peerBadge.innerHTML = '<span class="status-indicator-dot paired"></span> 🌐 Public Channel #369000';
       this.pttBtn.disabled = false;
       this.pttBtn.className = 'pwa-ptt-button ready';
-      this.pttLabel.textContent = 'HOLD TO TALK';
+      this.pttLabel.textContent = readyLabel;
       this.pttSub.textContent = 'VoIP — Crystal clear';
     } else if (paired) {
       this.peerBadge.innerHTML = '<span class="status-indicator-dot paired"></span> 🟢 VoIP Connected';
       this.pttBtn.disabled = false;
       this.pttBtn.className = 'pwa-ptt-button ready';
-      this.pttLabel.textContent = 'HOLD TO TALK';
-      this.pttSub.textContent = 'Hold button & speak';
+      this.pttLabel.textContent = readyLabel;
+      this.pttSub.textContent = readySub;
     } else {
       this.peerBadge.innerHTML = '<span class="status-indicator-dot waiting"></span> Waiting for peer...';
       this.pttBtn.disabled = true;

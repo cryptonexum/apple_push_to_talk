@@ -31,7 +31,6 @@
           <span class="online-pill" id="pwa-status"><span class="dot offline"></span> Connecting...</span>
         </div>
       </div>
-      <button class="icon-btn" id="btn-toggle-sim" title="Switch to Dual Watch Simulator">⌚ Sim</button>
     </header>
 
     <!-- PWA MAIN CONTAINER -->
@@ -76,6 +75,16 @@
           <div class="peer-badge" id="phone-peer-badge">
             <span class="status-indicator-dot paired"></span>
             <span id="phone-peer-status">Connected to Channel</span>
+          </div>
+
+          <!-- PTT MODE SWITCH -->
+          <div class="ptt-mode-row">
+            <span class="ptt-mode-label">Hold</span>
+            <label class="ptt-switch">
+              <input type="checkbox" id="ptt-mode-switch">
+              <span class="ptt-switch-track"></span>
+            </label>
+            <span class="ptt-mode-label">Toggle</span>
           </div>
 
           <!-- BIG PUSH TO TALK BUTTON -->
