@@ -31,7 +31,6 @@
           <span class="online-pill" id="pwa-status"><span class="dot offline"></span> Connecting...</span>
         </div>
       </div>
-      <button class="icon-btn" id="btn-toggle-sim" title="Switch to Dual Watch Simulator">⌚ Sim</button>
     </header>
 
     <!-- PWA MAIN CONTAINER -->
@@ -46,13 +45,13 @@
           
           <button class="btn-public-channel" id="btn-join-public">
             <span class="public-badge">GLOBAL PUBLIC</span>
-            <span class="public-title">🌐 Join Public Channel #369000</span>
+            <span class="public-title">🌐 Join Public Channel #000000</span>
           </button>
           
           <div class="divider-text"><span>OR PRIVATE 1-TO-1</span></div>
 
           <div class="code-input-row">
-            <input type="text" id="phone-code-input" maxlength="6" pattern="[0-9]*" inputmode="numeric" placeholder="369000">
+            <input type="text" id="phone-code-input" maxlength="6" pattern="[0-9]*" inputmode="numeric" placeholder="000000">
           </div>
           
           <div class="action-btn-row">
@@ -60,7 +59,7 @@
             <button class="btn-secondary" id="phone-btn-join">Join Code</button>
           </div>
           
-          <p class="subtitle-sm">Join Public #369000 or enter a code to talk with friends.</p>
+          <p class="subtitle-sm">Join Public #000000 or enter a code to talk with friends.</p>
         </div>
 
         <!-- LIVE TALK VIEW -->
@@ -68,7 +67,7 @@
           <div class="channel-info-header">
             <div>
               <span class="channel-label">CHANNEL</span>
-              <span class="channel-number" id="phone-code-display">#369000</span>
+              <span class="channel-number" id="phone-code-display">#000000</span>
             </div>
             <button class="btn-share" id="btn-share-room">🔗 Share Link</button>
           </div>
@@ -77,6 +76,13 @@
             <span class="status-indicator-dot paired"></span>
             <span id="phone-peer-status">Connected to Channel</span>
           </div>
+
+          <label class="ptt-mode-toggle" for="ptt-mode-switch">
+            <span class="ptt-mode-label ptt-mode-hold">Hold</span>
+            <input type="checkbox" id="ptt-mode-switch">
+            <span class="switch-track" aria-hidden="true"></span>
+            <span class="ptt-mode-label ptt-mode-tap">Tap</span>
+          </label>
 
           <!-- BIG PUSH TO TALK BUTTON -->
           <div class="ptt-container">
@@ -116,9 +122,9 @@
               
               <div class="screen-view active" id="setup-view-1">
                 <div class="app-title-sm">WALKIE-TALKIE</div>
-                <input type="text" id="code-input-1" maxlength="6" placeholder="369000">
+                <input type="text" id="code-input-1" maxlength="6" placeholder="000000">
                 <div class="btn-group-row">
-                  <button class="wt-btn btn-primary" id="btn-create-1">Public 369000</button>
+                  <button class="wt-btn btn-primary" id="btn-create-1">Public 000000</button>
                   <button class="wt-btn btn-secondary" id="btn-join-1">Join</button>
                 </div>
               </div>
@@ -126,7 +132,7 @@
               <div class="screen-view" id="talk-view-1">
                 <div class="peer-status-bar">
                   <span id="peer-ind-1">🟢 Connected</span>
-                  <span id="badge-code-1">#369000</span>
+                  <span id="badge-code-1">#000000</span>
                 </div>
                 <button class="ptt-button" id="ptt-btn-1" disabled>
                   <div class="mic-icon">🎙️</div>
@@ -146,9 +152,9 @@
               
               <div class="screen-view active" id="setup-view-2">
                 <div class="app-title-sm">WALKIE-TALKIE</div>
-                <input type="text" id="code-input-2" maxlength="6" placeholder="369000">
+                <input type="text" id="code-input-2" maxlength="6" placeholder="000000">
                 <div class="btn-group-row">
-                  <button class="wt-btn btn-primary" id="btn-create-2">Public 369000</button>
+                  <button class="wt-btn btn-primary" id="btn-create-2">Public 000000</button>
                   <button class="wt-btn btn-secondary" id="btn-join-2">Join</button>
                 </div>
               </div>
@@ -156,7 +162,7 @@
               <div class="screen-view" id="talk-view-2">
                 <div class="peer-status-bar">
                   <span id="peer-ind-2">🟢 Connected</span>
-                  <span id="badge-code-2">#369000</span>
+                  <span id="badge-code-2">#000000</span>
                 </div>
                 <button class="ptt-button" id="ptt-btn-2" disabled>
                   <div class="mic-icon">🎙️</div>

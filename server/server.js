@@ -32,7 +32,7 @@ webPush.setVapidDetails(
 );
 
 // ── State ────────────────────────────────────────────────────────────────────
-const PUBLIC_CHANNEL_CODE = '369000';
+const PUBLIC_CHANNEL_CODE = '000000';
 const rooms = new Map();                      // roomCode -> Set of socketIds
 const pushSubs = new Map();                   // socketId -> pushSubscription
 rooms.set(PUBLIC_CHANNEL_CODE, new Set());
