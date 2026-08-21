@@ -85,7 +85,7 @@ class WalkieTalkieVoIP {
 
   // ─── UI Events ──────────────────────────────────────────────────────────────
   bindUIEvents() {
-    document.getElementById('btn-join-public')?.addEventListener('click', () => this.joinRoom('369000'));
+    document.getElementById('btn-join-public')?.addEventListener('click', () => this.joinRoom('000000'));
     document.getElementById('phone-btn-create')?.addEventListener('click', () => this.createRoom());
     document.getElementById('phone-btn-join')?.addEventListener('click', () => this.joinRoom());
     document.getElementById('phone-btn-leave')?.addEventListener('click', () => this.leaveRoom());
@@ -118,7 +118,10 @@ class WalkieTalkieVoIP {
     this.pttBtn.addEventListener('mouseup',     onUp);
     this.pttBtn.addEventListener('mouseleave',  onUp);
     this.pttBtn.addEventListener('touchstart',  onDown,      { passive: false });
-    this.pttBtn.addEventListener('touchend',    onToggleTap, { passive: false });
+    this.pttBtn.addEventListener('touchend',    (e) => {
+      if (this.pttMode === 'hold') onUp(e);
+      else onToggleTap(e);
+    }, { passive: false });
     this.pttBtn.addEventListener('touchcancel', onUp,        { passive: false });
     // Desktop click for toggle mode
     this.pttBtn.addEventListener('click', (e) => {
@@ -135,12 +138,17 @@ class WalkieTalkieVoIP {
     const sw = document.getElementById('ptt-mode-switch');
     if (sw) sw.checked = mode === 'toggle';
 
-    // Update subtext hint
-    if (this.pttSub && !this.isTalking) {
-      this.pttSub.textContent = mode === 'hold' ? 'Hold & speak' : 'Tap to start';
+    // Update button copy when switching between hold and toggle controls.
+    if (!this.isTalking && this.pttLabel && this.pttSub) {
+      if (this.pttBtn.disabled) {
+        this.pttLabel.textContent = 'WAITING';
+        this.pttSub.textContent = 'Share the code below';
+      } else {
+        this.pttLabel.textContent = mode === 'hold' ? 'HOLD TO TALK' : 'TAP TO TALK';
+        this.pttSub.textContent = mode === 'hold' ? 'Hold & speak' : 'Tap to start';
+      }
     }
   }
-
 
   // ─── Socket Signaling Events ────────────────────────────────────────────────
   bindSocketEvents() {
@@ -159,7 +167,7 @@ class WalkieTalkieVoIP {
 
     s.on('peer-left', ({ peerId }) => {
       this.closePeerConnection(peerId);
-      if (this.roomCode && this.roomCode !== '369000') this.setPaired(false);
+      if (this.roomCode && this.roomCode !== '000000') this.setPaired(false);
     });
 
     s.on('webrtc-offer', async ({ fromId, offer }) => {
@@ -274,7 +282,12 @@ class WalkieTalkieVoIP {
   // ─── Room Management ────────────────────────────────────────────────────────
   createRoom() {
     this.socket.emit('create-room', {}, (res) => {
-      if (res?.success) { this.roomCode = res.roomCode; this.showTalk(false); this.saveLastRoom(res.roomCode); }
+      if (res?.success) {
+        this.roomCode = res.roomCode;
+        this.showTalk(false);
+        this.saveLastRoom(res.roomCode);
+        this.startKeepAlive();
+      }
     });
   }
 
@@ -289,7 +302,7 @@ class WalkieTalkieVoIP {
         this.roomCode = res.roomCode;
         this.showTalk(res.isPaired || res.isPublic);
         this.saveLastRoom(res.roomCode);
-        this.startKeepAlive(); // ← keep iOS alive in background
+        this.startKeepAlive(); // keep iOS alive in background
       } else {
         alert(res?.message || 'Failed to join');
       }
@@ -349,8 +362,8 @@ class WalkieTalkieVoIP {
     this.socket.emit('start-talk');
     navigator.vibrate?.([40]);
     this.pttBtn.className = 'pwa-ptt-button talking';
-    this.pttLabel.textContent = 'TALKING';
-    this.pttSub.textContent = 'Release to stop';
+    this.pttLabel.textContent = this.pttMode === 'toggle' ? 'TAP TO STOP' : 'TALKING';
+    this.pttSub.textContent = this.pttMode === 'toggle' ? 'Tap again to stop' : 'Release to stop';
     this.drawWave();
   }
 
@@ -374,13 +387,13 @@ class WalkieTalkieVoIP {
   }
 
   setPaired(paired) {
-    const pub = this.roomCode === '369000';
+    const pub = this.roomCode === '000000';
     const isToggle = this.pttMode === 'toggle';
     const readyLabel = isToggle ? 'TAP TO TALK' : 'HOLD TO TALK';
     const readySub   = isToggle ? 'Tap to start' : 'Hold & speak';
 
     if (pub) {
-      this.peerBadge.innerHTML = '<span class="status-indicator-dot paired"></span> 🌐 Public Channel #369000';
+      this.peerBadge.innerHTML = '<span class="status-indicator-dot paired"></span> 🌐 Public Channel #000000';
       this.pttBtn.disabled = false;
       this.pttBtn.className = 'pwa-ptt-button ready';
       this.pttLabel.textContent = readyLabel;

@@ -318,6 +318,68 @@ body {
 .status-indicator-dot.talking { background: #f7630c; box-shadow: 0 0 8px #f7630c; }
 .status-indicator-dot.receiving { background: #58a6ff; box-shadow: 0 0 8px #58a6ff; }
 
+.switch-track {
+  position: relative;
+  width: 48px;
+  height: 28px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+  border: 1px solid var(--border-color);
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.switch-track::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  transition: transform 0.2s;
+}
+
+.ptt-mode-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  cursor: pointer;
+}
+
+.ptt-mode-label {
+  min-width: 32px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-align: center;
+}
+
+.ptt-mode-toggle input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.ptt-mode-toggle:has(input:not(:checked)) .ptt-mode-hold,
+.ptt-mode-toggle:has(input:checked) .ptt-mode-tap {
+  color: var(--text-main);
+}
+
+.ptt-mode-toggle input:checked + .switch-track {
+  background: var(--accent-orange);
+  border-color: var(--accent-orange);
+}
+
+.ptt-mode-toggle input:checked + .switch-track::after {
+  transform: translateX(20px);
+}
+
 /* BIG PTT BUTTON FOR IPHONE */
 .ptt-container {
   display: flex;
@@ -366,7 +428,7 @@ body {
 
 .ptt-subtext {
   font-size: 11px;
-  color: var(--text-muted);
+  color:  #fff;
 }
 
 /* PWA PTT STATES */
